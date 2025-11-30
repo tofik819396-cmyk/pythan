@@ -1,0 +1,163 @@
+#src
+import pandas as pd
+from pathlib import Path
+
+def load_energy_data(data_folder="data/"):
+    data_path = Path(data_folder)
+    all_files = list(data_path.glob("*.csv"))
+
+    df_list = []
+    logs = []
+
+    for file in all_files:
+        try:
+            df = pd.read_csv(file, on_bad_lines='skip')
+
+            # Add metadata
+            df["building"] = file.stem.split("_")[0]   # building_A_jan → building_A
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+            df_list.append(df)
+
+        except FileNotFoundError:
+            logs.append(f"File missing: {file}")
+        except Exception as e:
+            logs.append(f"Error reading {file}: {e}")
+
+    df_combined = pd.concat(df_list, ignore_index=True)
+    return df_combined, logs
+import pandas as pd
+
+def calculate_daily_totals(df):
+    return df.resample("D", on="timestamp")["kwh"].sum()
+
+def calculate_weekly_totals(df):
+    return df.resample("W", on="timestamp")["kwh"].sum()
+
+def building_wise_summary(df):
+    return df.groupby("building")["kwh"].agg(["mean", "min", "max", "sum"])
+class MeterReading:
+    def __init__(self, timestamp, kwh):
+        self.timestamp = timestamp
+        self.kwh = kwh
+
+
+class Building:
+    def __init__(self, name):
+        self.name = name
+        self.meter_readings = []
+
+    def add_reading(self, reading):
+        self.meter_readings.append(reading)
+
+    def total_consumption(self):
+        return sum(r.kwh for r in self.meter_readings)
+
+    def generate_report(self):
+        values = [r.kwh for r in self.meter_readings]
+        if not values:
+            return {"total": 0, "min": 0, "max": 0, "mean": 0}
+
+        return {
+            "total": sum(values),
+            "min": min(values),
+            "max": max(values),
+            "mean": sum(values) / len(values),
+        }
+
+
+class BuildingManager:
+    def __init__(self):
+        self.buildings = {}
+
+    def add_reading(self, building_name, timestamp, kwh):
+        if building_name not in self.buildings:
+            self.buildings[building_name] = Building(building_name)
+        self.buildings[building_name].add_reading(MeterReading(timestamp, kwh))
+
+    def total_campus_consumption(self):
+        return sum(b.total_consumption() for b in self.buildings.values())
+
+    def highest_consuming_building(self):
+        return max(self.buildings.values(), key=lambda b: b.total_consumption())
+    import matplotlib.pyplot as plt
+
+def generate_dashboard(df_daily, df_weekly, df):
+    fig, axs = plt.subplots(3, 1, figsize=(12, 16))
+
+    # 1. Trend Line
+    for b in df["building"].unique():
+        axs[0].plot(df_daily.index, df_daily[b], label=b)
+    axs[0].set_title("Daily Consumption Trend")
+    axs[0].legend()
+
+    # 2. Weekly Bar Chart
+    weekly_mean = df_weekly.mean().sort_values()
+    axs[1].bar(weekly_mean.index, weekly_mean)
+    axs[1].set_title("Average Weekly Consumption Comparison")
+
+    # 3. Scatter Plot (peak hour)
+    axs[2].scatter(df["timestamp"], df["kwh"], s=10)
+    axs[2].set_title("Scatter: Consumption vs Time")
+
+    plt.tight_layout()
+    plt.savefig("dashboard.png")
+    import pandas as pd
+from ingest import load_energy_data
+from aggregation import calculate_daily_totals, calculate_weekly_totals, building_wise_summary
+from models import BuildingManager
+from visualize import generate_dashboard
+
+def main():
+
+    # ------------------------------
+    # Task 1: Load Data
+    # ------------------------------
+    df, logs = load_energy_data("data/")
+    print("Ingestion Logs:", logs)
+
+    # ------------------------------
+    # Task 2: Aggregations
+    # ------------------------------
+    df_daily = df.set_index("timestamp").groupby("building")["kwh"].resample("D").sum().unstack(0)
+    df_weekly = df.set_index("timestamp").groupby("building")["kwh"].resample("W").sum().unstack(0)
+
+    summary = building_wise_summary(df)
+
+    # ------------------------------
+    # Task 3: OOP Model Loading
+    # ------------------------------
+    manager = BuildingManager()
+    for _, row in df.iterrows():
+        manager.add_reading(row["building"], row["timestamp"], row["kwh"])
+
+    total_campus = manager.total_campus_consumption()
+    top_building = manager.highest_consuming_building().name
+    peak_load_row = df.loc[df["kwh"].idxmax()]
+    peak_time = peak_load_row["timestamp"]
+
+    # ------------------------------
+    # Task 4: Dashboard Visualization
+    # ------------------------------
+    generate_dashboard(df_daily, df_weekly, df)
+
+    # ------------------------------
+    # Task 5: Export Files
+    # ------------------------------
+    df.to_csv("output/cleaned_energy_data.csv", index=False)
+    summary.to_csv("output/building_summary.csv")
+
+    with open("output/summary.txt", "w") as f:
+        f.write("Campus Energy Summary Report\n")
+        f.write("----------------------------\n")
+        f.write(f"Total Campus Consumption: {total_campus} kWh\n")
+        f.write(f"Highest Consuming Building: {top_building}\n")
+        f.write(f"Peak Load Time: {peak_time}\n")
+        f.write("\nDaily/Weekly Trends saved in dashboard.png\n")
+
+    print("Pipeline completed successfully.")
+
+if __name__ == "__main__":
+    main()
+    
+
